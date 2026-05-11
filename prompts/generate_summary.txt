@@ -1,0 +1,1 @@
+Summarize the topic of this celebrity roast in 1 or 2 sentences: {human_roast}
