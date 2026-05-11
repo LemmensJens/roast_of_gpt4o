@@ -1,0 +1,382 @@
+---
+title: "Supplementary materials"
+output: html_notebook
+---
+
+# 1. Load necessary materials 
+
+
+## 1.1. Load necessary libraries
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+# Load libraries for data manipulation, analysis, and visualization
+
+library(readr)       # For reading CSV files efficiently
+library(dplyr)       # For data manipulation (filter, mutate, summarize, etc.)
+library(tidyr)       # For tidying data (pivoting, reshaping)
+library(ggplot2)     # For creating high-quality plots
+library(lme4)        # For fitting linear mixed-effects models
+library(emmeans)     # For computing estimated marginal means (post-hoc comparisons)
+library(lmerTest)    # For hypothesis tests in linear mixed-effects models
+library(gridExtra)   # For arranging multiple plots in a grid layout
+library(cowplot)     # For complex ggplot2 layouts and annotations
+library(DescTools)   # For descriptive statistics and other statistical tools
+library(sjmisc)      # For data preparation and variable recoding
+library(readxl)      # For reading Excel files
+library(sjPlot)      # For creating summary tables and plots (especially for mixed models)
+library(broom.mixed) # For tidying mixed-model outputs into data frames
+library(ordinal)     # For ordinal regression models
+library(ggridges)    # For ridgelines
+```
+
+## 1.2. Load project datasets
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+# Set working directory to the project folder
+setwd(" ")
+
+# Load CSV files into R and assign them to variables
+# Each dataset is read using read_csv from the readr package
+
+ai_prediction <- read_csv("ai_prediction.csv")       # Is it AI or not
+funny_rating <- read_csv("funny_rating.csv")         # Human ratings of funniness
+familiarity <- read_csv("familiarity.csv")           # Familiarity ratings
+seen_before <- read_csv("seen_before.csv")           # Whether participants had seen items before
+authors_gold_standard <- read_csv("authors_gold_standard.csv") # Gold standard labels 
+```
+
+
+# 2. Prepare and reshape datasets
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+# Add a 'subject' column as a unique identifier for each row
+# Remove the first column (assumed to be an old index or redundant)
+ai_prediction <- ai_prediction %>% mutate(subject = row_number()) %>% select(-1)
+funny_rating  <- funny_rating %>% mutate(subject = row_number()) %>% select(-1)
+familiarity   <- familiarity %>% mutate(subject = row_number()) %>% select(-1)
+seen_before   <- seen_before %>% mutate(subject = row_number()) %>% select(-1)
+authors_gold_standard <- authors_gold_standard %>% select(-1) # No subject needed
+
+# 'pivot_longer' reshapes the data: each item becomes a row per subject
+ai_long <- ai_prediction %>%
+  pivot_longer(
+    -subject,            # keep 'subject' column as is
+    names_to = "item",    # column name for original variable names
+    values_to = "ai_prediction"  # column name for values
+  )
+
+funny_long <- funny_rating %>%
+  pivot_longer(
+    -subject,
+    names_to = "item",
+    values_to = "funny_rating"
+  )
+
+familiarity_long <- familiarity %>%
+  pivot_longer(
+    -subject,
+    names_to = "item",
+    values_to = "familiarity"
+  )
+
+seen_before_long <- seen_before %>%
+  pivot_longer(
+    -subject,
+    names_to = "item",
+    values_to = "seen_before"
+  )
+
+authors_gold_standard_long <- pivot_longer(
+  authors_gold_standard,
+  cols = everything(),                    # pivot all columns
+  names_to = "item",                      # column to hold original column names
+  values_to = "authors_gold_standard"     # column to hold the values
+)
+```
+
+# 3. Combine all datasets into a single long-format table
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+# Merge all long-format datasets by 'subject' and 'item'
+# Authors gold standard only by 'item' since it's the same for all subjects
+data_long <- ai_long %>%
+  left_join(funny_long, by = c("subject", "item")) %>%
+  left_join(familiarity_long, by = c("subject", "item")) %>%
+  left_join(seen_before_long, by = c("subject", "item")) %>%
+  left_join(authors_gold_standard_long, by = "item") %>%
+  mutate(
+    # Convert relevant variables to factors for modeling
+    ai_prediction = as.factor(ai_prediction),
+    familiarity   = as.factor(familiarity),
+    seen_before   = as.factor(seen_before),
+    authors_gold_standard = as.factor(authors_gold_standard),
+    
+    # Ensure numeric variables are correctly typed
+    funny_rating  = as.numeric(funny_rating),
+    
+    # Clean up 'item' names and convert to factor
+    item          = as.factor(gsub("item", "", item)),
+    
+    # Convert subject ID to factor
+    subject       = as.factor(subject)
+  )
+```
+
+
+# 4. Relevel ordinal variables
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+# Convert selected variables to ordered factors
+# This is important for ordinal modeling and analyses
+data_final <- data_long %>%
+  mutate(
+    seen_before  = as.ordered(seen_before),   # 'seen_before' is now an ordered factor
+    funny_rating = as.ordered(funny_rating)   # 'funny_rating' is now an ordered factor
+  )
+```
+
+
+
+#5.  Statistical analysis
+
+## Null model
+
+```{r}
+# Fit a null cumulative link mixed model (CLMM)
+# This model includes only random intercepts for subject and item
+# No fixed effects are included (intercept-only model)
+m.null <- clmm(
+  funny_rating ~ 1 + (1 | subject) + (1 | item),  # Formula for null model
+  data = data_final
+)
+
+# Display model summary in the console (can be suppressed if needed)
+summary(m.null)
+```
+
+## Model 1: Main effect of AI prediction
+```{r}
+# Fit a CLMM including AI prediction as a fixed effect
+m1.ai.pred <- clmm(
+  funny_rating ~ ai_prediction + (1 | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary with coefficients and random effects
+summary(m1.ai.pred)
+
+# Likelihood ratio test comparing null model to Model 1
+print(anova(m.null, m1.ai.pred))
+```
+
+## Model 2: Random slope of AI prediction by subject
+```{r}
+# Fit a CLMM with a random slope for AI prediction within subjects
+# - This allows each subject to have their own effect of AI prediction
+# - Items still have only random intercepts
+m2.ai.pred <- clmm(
+  funny_rating ~ ai_prediction + (1 + ai_prediction | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary with coefficients, thresholds, and random effects
+summary(m2.ai.pred)
+
+# Likelihood ratio test: compare Model 1 (fixed effect only) vs. Model 2 (random slope)
+anova(m1.ai.pred, m2.ai.pred)
+```
+Result:
+
+The likelihood ratio test shows no significant improvement when adding a random slope for AI prediction.
+
+Therefore, Model 1 (main effect of AI prediction only) is preferred.
+
+
+## Model 3: Main effect of  gold standard
+```{r}
+# Fit a CLMM with AI prediction and authors' gold standard as fixed effects
+m3.auth.std <- clmm(
+  funny_rating ~ ai_prediction + authors_gold_standard + 
+    (1 | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary of Model 3
+summary(m3.auth.std)
+
+# Likelihood ratio test: compare Model 1 vs. Model 3
+anova(m1.ai.pred, m3.auth.std)
+```
+Result:
+
+Adding the gold standard as a fixed effect does not significantly improve model fit.
+
+Model 1 (main effect of AI prediction only) remains the preferred model.
+
+## Model 4: Main effect of familiarity
+```{r}
+# Fit a CLMM with AI prediction and familiarity as fixed effects
+m4.fam <- clmm(
+  funny_rating ~ ai_prediction + familiarity + 
+    (1 | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary of Model 4
+summary(m4.fam)
+
+# Likelihood ratio test: compare Model 1 (AI prediction only) vs. Model 4
+anova(m1.ai.pred, m4.fam)
+```
+Result:
+
+Adding familiarity as a fixed effect does not significantly improve the model fit.
+
+Model 1 (main effect of AI prediction only) remains the preferred model.
+
+## Model 5: Main effect of “seen before”
+```{r}
+# Fit a CLMM with AI prediction and 'seen_before' as fixed effects
+m5.seen <- clmm(
+  funny_rating ~ ai_prediction + seen_before + 
+    (1 | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary of Model 5
+summary(m5.seen)
+
+# Likelihood ratio test: compare Model 1 (AI prediction only) vs. Model 5
+anova(m1.ai.pred, m5.seen)
+```
+Result:
+
+Adding seen_before as a fixed effect significantly improves the model fit compared to Model 1.
+
+At this stage, Model 5 is preferred over previous models.
+
+## Model 6: Random slope of “seen before” by subject
+```{r}
+# Fit a CLMM with AI prediction and 'seen_before' as fixed effects
+# Add a random slope for 'seen_before' within subjects
+m6.seen <- clmm(
+  funny_rating ~ ai_prediction + seen_before + 
+    (1 + seen_before | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary of Model 6
+summary(m6.seen)
+
+# Likelihood ratio test: compare Model 5 (fixed effect only) vs. Model 6 (random slope)
+anova(m5.seen, m6.seen)
+```
+Result:
+
+Adding a random slope for seen_before by subject does not significantly improve model fit compared to Model 5.
+
+Therefore, Model 5 (main effect of AI prediction + seen_before) remains the preferred model.
+
+
+## Model 7: Interaction between AI prediction and “seen before”
+```{r}
+# Fit a CLMM with an interaction between AI prediction and 'seen_before'
+m7.inter <- clmm(
+  funny_rating ~ ai_prediction * seen_before + 
+    (1 | subject) + (1 | item),
+  data = data_final
+)
+
+# Show summary of Model 7
+summary(m7.inter)
+
+# Likelihood ratio test: compare Model 5 (main effects only) vs. Model 7 (interaction added)
+anova(m5.seen, m7.inter)
+```
+Result:
+
+Adding the interaction between AI prediction and seen_before does not significantly improve model fit.
+
+Therefore, the simpler Model 5 (main effects only) remains the preferred model.
+
+## Final Model
+```{r}
+final_model <- m5.seen
+summary(final_model)
+```
+
+
+Main results:
+
+- When roast judged as written by human, it is rated as sigingicantly more funny
+- the more the participants is sure the to have seen the roast before, the more it is funny
+
+# 6. Plot results
+```{r}
+
+library(patchwork)
+data_scaled$authors_gold_standard <- as.character(data_scaled$authors_gold_standard)
+data_scaled$authors_gold_standard[data_final$authors_gold_standard == "human"] <- "Human"
+# Example: suppose your predictors are ai_prediction, human_prediction, and seen_before
+# (replace or add more variables as needed)
+
+p1 <- ggplot(data_scaled, aes(x = ai_prediction, y = as.numeric(funny_rating_scaled))) +
+  geom_boxplot(trim = FALSE, fill = "lightblue", color = "blue", outlier.shape = NA) +
+  labs(
+    subtitle = "Author prediction",
+    x = "",
+    y = "Funniness Rating\n(normalized per participant)"
+  ) +
+  theme_minimal() 
+
+p2 <- ggplot(data_scaled, aes(x = authors_gold_standard, y = as.numeric(funny_rating_scaled))) +
+  geom_boxplot(trim = FALSE, fill = "palegreen", color = "limegreen",outlier.shape = NA) +
+  labs(
+    subtitle = "Author",
+    x="",
+    y=""
+  ) +
+  theme_minimal()
+
+p3 <- ggplot(data_scaled, aes(x = seen_before, y = as.numeric(funny_rating_scaled))) +
+  geom_boxplot(trim = FALSE, fill = "lightpink", color = "magenta",outlier.shape = NA) +
+  labs(
+    subtitle = "Prior encounter",
+    x="",
+    y = "Funniness Rating\n(normalized per participant)"
+  ) +
+  theme_minimal()
+
+p4 <- ggplot(data_scaled, aes(x = familiarity, y = as.numeric(funny_rating_scaled))) +
+  geom_boxplot(trim = FALSE, fill = "purple", color = "purple4",outlier.shape = NA) +
+  labs(
+    subtitle = "Familiarity",
+    x="",
+    y=""
+  ) +
+  theme_minimal()
+
+p1 <- p1 + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p2 <- p2 + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p3 <- p3 + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p4 <- p4 + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2 <- p2 + ylab(NULL)
+#p3 <- p3 + ylab(NULL)
+p4 <- p4 + ylab(NULL)
+
+# Combine them into one layout using patchwork
+combined_plot <- (p1 | p2) / (p3 | p4) +
+  plot_layout(guides = "collect") 
+
+
+combined_plot
+
+# Save as a square image (e.g., 8x8 inches)
+ggsave(
+  filename = "combined_plot.png",   # change to your desired file name
+  plot = combined_plot,             # your patchwork plot
+  width = 4,                        # width in inches
+  height = 6,                       # height in inches (same as width for square)
+  dpi = 300                         # resolution
+)
+```
+
+

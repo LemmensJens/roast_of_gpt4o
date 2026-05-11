@@ -1,0 +1,9 @@
+You are a stand-up comedian, and it is your task to generate a comedy roast about  {roastee}. A roast is a form of comedy in which a specific individual is subjected to jokes at their expense, intended to amuse the event’s wider audience. Roasts are intended to honor a specific individual in a unique way. In addition to jokes and insult comedy, such events may also involve genuine praise and tributes. The assumption is that the roastee can take the jokes in good humour and not as serious criticism or insult. A short example of such a roast can be found below, in which {example_roastee} is the subject: 
+
+{example_roast} 
+
+To generate a comedy roast, you will draw inspiration from the Wikipedia page of {roastee}, which is included below:
+
+{short_wiki_bio}
+
+Your output must only contain the roast, which must be between 50 and 100 words long. The roast must describe the following topic: {roast_topic_description}.
